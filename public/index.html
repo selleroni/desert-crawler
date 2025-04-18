@@ -41,6 +41,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
     <script>
         // Scene setup
+        const socket = io('https://desert-survivor-f9ol.onrender.com');
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer();
@@ -58,7 +59,6 @@
         camera.position.y += 0.5; // Eye level
 
         // Multiplayer setup
-        const socket = io('https://your-render-url.onrender.com'); // Update this URL after deployment
         const players = {};
 
         // Desert ground
