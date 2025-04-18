@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Desert Crawler</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #healthBarContainer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            width: 200px;
+            height: 20px;
+            background: #333;
+            border: 2px solid #fff;
+        }
+        #healthBar {
+            width: 100%;
+            height: 100%;
+            background: #f00;
+            transition: width 0.2s;
+        }
+        #info {
+            position: absolute;
+            top: 40px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="healthBarContainer">
+        <div id="healthBar"></div>
+    </div>
+    <div id="info">Use WASD to crawl, find water puddles to restore health!</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Player setup
+        const player = {
+            id: null,
+            position: new THREE.Vector3(0, 0.5, 0),
+            health: 100,
+            isMoving: false
+        };
+        camera.position.copy(player.position);
+        camera.position.y += 0.5; // Eye level
+
+        // Multiplayer setup
+        const socket = io('https://your-render-url.onrender.com'); // Update this URL after deployment
+        const players = {};
+
+        // Desert ground
+        const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+        const groundTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/terrain/sand.jpg');
+        groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
+        groundTexture.repeat.set(100, 100);
+        const groundMaterial = new THREE.MeshBasicMaterial({ map: groundTexture });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        scene.add(ground);
+
+        // Water puddles
+        const puddles = [];
+        const puddleGeometry = new THREE.CircleGeometry(1, 32);
+        const puddleTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/water.jpg');
+        const puddleMaterial = new THREE.MeshBasicMaterial({ map: puddleTexture, transparent: true, opacity: 0.8 });
+
+        function createPuddle() {
+            const puddle = new THREE.Mesh(puddleGeometry, puddleMaterial);
+            puddle.position.set(
+                (Math.random() - 0.5) * 900,
+                0.01,
+                (Math.random() - 0.5) * 900
+            );
+            puddle.rotation.x = -Math.PI / 2;
+            scene.add(puddle);
+            puddles.push(puddle);
+        }
+
+        for (let i = 0; i < 10; i++) createPuddle();
+
+        // Other players' models
+        const playerGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const playerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+
+        // Controls
+        const keys = { w: false, a: false, s: false, d: false };
+        document.addEventListener('keydown', (e) => {
+            if (e.key in keys) keys[e.key] = true;
+            player.isMoving = Object.values(keys).some(k => k);
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.key in keys) keys[e.key] = false;
+            player.isMoving = Object.values(keys).some(k => k);
+        });
+
+        // Mouse look
+        let yaw = 0, pitch = 0;
+        document.addEventListener('mousemove', (e) => {
+            yaw -= e.movementX * 0.002;
+            pitch -= e.movementY * 0.002;
+            pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+            camera.rotation.set(pitch, yaw, 0);
+        });
+        document.body.requestPointerLock();
+
+        // Health system
+        const healthBar = document.getElementById('healthBar');
+        function updateHealthBar() {
+            healthBar.style.width = `${player.health}%`;
+            if (player.health <= 0) {
+                player.health = 0;
+                alert('You died! Respawning...');
+                player.position.set(0, 0.5, 0);
+                player.health = 100;
+            }
+        }
+
+        // Socket.IO events
+        socket.on('connect', () => {
+            player.id = socket.id;
+            socket.emit('newPlayer', { position: player.position, health: player.health });
+        });
+
+        socket.on('updatePlayers', (serverPlayers) => {
+            Object.keys(players).forEach(id => {
+                if (!serverPlayers[id]) {
+                    scene.remove(players[id].mesh);
+                    delete players[id];
+                }
+            });
+
+            Object.keys(serverPlayers).forEach(id => {
+                if (id === player.id) return;
+                if (!players[id]) {
+                    const mesh = new THREE.Mesh(playerGeometry, playerMaterial);
+                    scene.add(mesh);
+                    players[id] = { mesh };
+                }
+                players[id].mesh.position.copy(serverPlayers[id].position);
+            });
+        });
+
+        socket.on('playerDisconnected', (id) => {
+            if (players[id]) {
+                scene.remove(players[id].mesh);
+                delete players[id];
+            }
+        });
+
+        // Game loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Movement (crawling speed)
+            const speed = 0.05;
+            const direction = new THREE.Vector3();
+            if (keys.w) direction.z -= 1;
+            if (keys.s) direction.z += 1;
+            if (keys.a) direction.x -= 1;
+            if (keys.d) direction.x += 1;
+
+            if (direction.length() > 0) {
+                direction.normalize().multiplyScalar(speed);
+                direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                player.position.add(direction);
+                camera.position.copy(player.position).add(new THREE.Vector3(0, 0.5, 0));
+            }
+
+            // Health decay
+            player.health -= player.isMoving ? 0.03 : 0.01;
+            updateHealthBar();
+
+            // Check for puddles
+            puddles.forEach((puddle, index) => {
+                if (player.position.distanceTo(puddle.position) < 1.5) {
+                    player.health = Math.min(100, player.health + 50);
+                    scene.remove(puddle);
+                    puddles.splice(index, 1);
+                    createPuddle(); // Respawn a new puddle
+                }
+            });
+
+            // Update server
+            socket.emit('update', { position: player.position, health: player.health });
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
